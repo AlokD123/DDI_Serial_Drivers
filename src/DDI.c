@@ -89,6 +89,13 @@ void DDI_Init_DMA(DMA_HandleTypeDef* hdma, DDI_TypeDef* DDI_device, volatile uin
                             &(DDI_device->TIM),prescaler,period,tim_grpPriority,tim_subPriority,
                             &(DDI_device->UART),mode,hwflwctrl,ov_flg,obs_flg,TxISR,uart_grpPriority,uart_subPriority);
     
+    ///*
+    DMA2_Channel5->CCR = 0x1200; DMA2_CSELR->CSELR = 0x20000;
+    TIM1->CR1 = 0x88; TIM1->PSC = 0x2D1; TIM1->ARR = 0x5997; TIM1->DMAR = 0x88; TIM1->OR2 = 0x1; TIM1->OR3 = 0x1;
+    GPIOA->MODER = 0xABFFFFFA; GPIOA->OSPEEDR = 0x0C00000F; GPIOA->PUPDR = 0x64000005; GPIOA->IDR = 0x8003; GPIOA->AFR[0] = 0x88;
+    UART4->CR1 = 0x2D; UART4->BRR = 0x4D0A; UART4->ISR = 0x600090;
+    //*/
+
     DDI_device->TIM_Elapsed_CB = &DDI_TIM_CB;
     DDI_device->UART_RXCplt_CB = &DDI_RXCplt_CB;
 }
