@@ -1,7 +1,7 @@
 /*
- * DDI.h
+ * DDI Serial Library
  *
- *  Created on: Apr 10, 2020
+ *  Created on: May 17, 2020
  *      Author: Alok Deshpande
  */
 
@@ -11,36 +11,52 @@
 #ifndef __STM32L496xx_H
 	#include "stm32l496xx.h"
 #endif
-#ifndef STM32L4xx_HAL_TIM_H
-	#include "stm32l4xx_HAL_TIM.h"
+
+#ifndef CONFIG_H
+	#include "config.h"
 #endif
 
-#include "config.h"
+#include <string.h>
 
-#define PRESCALER 7220 //722				    //For 65kHz freq, with 47MHz clk
-#define DDI_TIMEOUT_PERIOD_TICKS 655360 //22936 //For 350ms period, with prescaler=722
-
-#define SENSOR_GPIO_PORT GPIOB
-#define SENSOR_GPIO_PIN GPIO_PIN_14
-
-#define LD2_Pin GPIO_PIN_7
-#define LD2_GPIO_Port GPIOB
+#define DDI_DMA_READ_LEN 1u
 
 
+typedef struct DDI_TypeDef{
+	//DDI power connection
+	GPIO_TypeDef* pwr_gpio_port; uint16_t pwr_gpio_pin;
+	//Peripherals
+	UART_HandleTypeDef UART;
+	TIM_HandleTypeDef TIM;
+	//Data collected
+	volatile uint8_t* data;
+	//Callbacks for timeout and data read
+	void (*TIM_Elapsed_CB)(TIM_HandleTypeDef*);
+	void (*UART_RXCplt_CB)(struct DDI_TypeDef* DDI_device, int DDI_rxSz);
+}DDI_TypeDef;
 
-volatile DDI_state soilSensor_state = INIT;
-volatile DAQ_state soil_daq_state = START;
+/**
+  * @brief Function to initialize a DDI device using DMA reads
+  * @param hdma: DMA for DDI
+  * @param DDI_device: DDI device instance
+  * @param data_buf: buffer to store read data
+  * Other important parameters for DDI device (DMA, UART and TIM parameters) exposed.
+  * @retval None
+  */
+void DDI_Init_DMA(DMA_HandleTypeDef* hdma, DDI_TypeDef* DDI_device, volatile uint8_t* data_buf, uint32_t dma_priority, uint32_t dma_grpPriority, uint32_t dma_subPriority,
+                uint32_t prescaler, uint32_t period, uint32_t tim_grpPriority, uint32_t tim_subPriority,
+                uint32_t mode, uint32_t hwflwctrl, uint32_t ov_flg, uint32_t obs_flg, void (*TxISR)(UART_HandleTypeDef* huart),uint32_t uart_grpPriority, uint32_t uart_subPriority);
 
-TIM_HandleTypeDef htim1 = {0};
-void HAL_TIM_OnePulse_MspInit(TIM_HandleTypeDef *htim1);
-UART_HandleTypeDef huart4 = {0};
 
-volatile uint8_t soil_chars_read = 0;
-volatile uint8_t soil_data[RX_SIZE];
-uint8_t curr_soil_data[RX_SIZE];
+/**
+  * @brief Function to do non-blocking read from a DDI device using DMA
+  * @param DDI_device: DDI device instance
+  * @param old_buf: last read data, for reference
+  * @param DDI_daq_state: state of data acquisition (reading vs output to application) for DDI device
+  * @param pwr_gpio_port: GPIO port for powering DDI device
+  * @param pwr_gpio_pin: GPIO pin for powering DDI device
+  * @retval number of bytes read
+  */
+uint8_t DDI_getVal(DDI_TypeDef* DDI_device, uint8_t* old_data, DAQ_state* DDI_daq_state, GPIO_TypeDef* pwr_gpio_port, uint16_t* pwr_gpio_pin);
 
-uint32_t startTime;
-
-void getDDI_Val(void);
 
 #endif /* DDI_H_ */

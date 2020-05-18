@@ -22,16 +22,24 @@
 #include "../include/main.h"
 #include <assert.h>
 
-//Macro to set register. Only use with OR-MASK and OR-VALUE. Only use if more than 1 bit to set
-//e.g. RCC_AHB2ENR_GPIOAEN only has 1 bit to set b/c 1UL is bit-shifted
-#define SET_REGISTER(REG,MASK,VALUE) ( ((REG) & ~(MASK)) | VALUE)
+//Soil sensor definition
+#define PRESCALER 7220 //722				    //For 65kHz freq, with 47MHz clk
+#define SOIL_TIMEOUT_PERIOD_TICKS 655360 //22936 //For 350ms period, with prescaler=722
+#define SOIL_PWR_GPIO_PORT GPIOB
+#define SOIL_PWR_GPIO_PIN GPIO_PIN_14
+#define RX_SIZE 30
+
+#define DMA_GRP_PRIORITY 15
+#define DMA_SUB_PRIORITY 15
+#define TIM_GRP_PRIORITY 15
+#define TIM_SUB_PRIORITY 15
+#define UART_GRP_PRIORITY 15
+#define UART_SUB_PRIORITY 15
+
+
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_UART4_Init(void);
-static void MX_USART3_Init(void);
-static void DMA2_Init(void);
 
 /* USER CODE BEGIN PFP */
 void Error_Handler(void);
@@ -43,32 +51,35 @@ void HAL_MspInit(void)
 __HAL_RCC_SYSCFG_CLK_ENABLE();
 /* System interrupt init*/
  /* SVC_IRQn interrupt configuration */
- HAL_NVIC_SetPriority(SVCall_IRQn, 0, 0); //Group Priority, Subgroup Priority. GRPPrioirty determines preemption
+ HAL_NVIC_SetPriority(SVCall_IRQn, 0, 0); //Group Priority, Subgroup Priority. GRPPriority determines preemption
  /* PendSV_IRQn interrupt configuration */
  HAL_NVIC_SetPriority(PendSV_IRQn, 0, 0);
  /* SysTick_IRQn interrupt configuration */
  //HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
  HAL_NVIC_EnableIRQ(SysTick_IRQn);
 }
-void HardFault_Handler(void){
-  Error_Handler();
-}
 
-
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
-void rosWriteStr(const char* topic, uint8_t* str_msg_ptr, size_t num_bytes){
+void rosWriteStr(const char* topic, volatile uint8_t* str_msg_ptr, size_t num_bytes){
 	//HAL_USART_Transmit(&husart3, str_msg_ptr, num_bytes, 100); //100ms timeout
 }
-/* USER CODE END 0 */
 
 /**
   * @brief  The application entry point.
   * @retval int
   */
+
+ static DDI_TypeDef soilDDI = {0}; //Sensor
+ static DMA_HandleTypeDef hdma2;   //Using DMA2
+ //Storage variables
+ static uint8_t soil_chars_read;
+ volatile static uint8_t soil_data[RX_SIZE];
+ static uint8_t old_soil_data[RX_SIZE];
+ //Program state variables
+ DAQ_state soil_daq_state = START;
+
 int main(void)
 {
-    /* MCU Configuration--------------------------------------------------------*/
+  /* ----- MCU Configuration ------- */
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
   /* Configure the system clock */
@@ -77,32 +88,37 @@ int main(void)
    HAL_DBGMCU_EnableDBGStandbyMode();
    HAL_DBGMCU_EnableDBGStopMode();
 
-  /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_UART4_Init();
-  MX_USART3_Init();
-  DMA2_Init();
+  /* Initialize sensors */
 
-  HAL_TIM_OnePulse_MspInit(&htim1);
+  //Soil sensor
+    soilDDI.pwr_gpio_port = SOIL_PWR_GPIO_PORT;
+    soilDDI.pwr_gpio_pin = SOIL_PWR_GPIO_PIN;
+
+    DDI_Init_DMA(&hdma2, &soilDDI,soil_data,DMA_PRIORITY_MEDIUM,DMA_GRP_PRIORITY,DMA_SUB_PRIORITY,
+                PRESCALER,SOIL_TIMEOUT_PERIOD_TICKS,TIM_GRP_PRIORITY,TIM_SUB_PRIORITY,
+                UART_MODE_TX_RX, UART_HWCONTROL_NONE,UART_OVERSAMPLING_16,UART_ONE_BIT_SAMPLE_DISABLE,
+                HAL_UART_TxCpltCallback,UART_GRP_PRIORITY,UART_SUB_PRIORITY);
 
   while (1)
   {
-	  if(soil_daq_state == START) getDDI_Val();
-
-	  if(soil_daq_state == GOT_DATA){
-		  soil_daq_state = SENT_DATA;
-		  rosWriteStr("",curr_soil_data,soil_chars_read);   //Publish data
-		  soil_chars_read = 0; 								//Reset number of chars read for next time
-	  }
-	  if(soil_daq_state == SENT_DATA){
-		  soil_daq_state = START;
-	  }
+	  switch(soil_daq_state){
+            case START:
+                soil_chars_read = DDI_getVal(&soilDDI,old_soil_data,&soil_daq_state,soilDDI.pwr_gpio_port,&(soilDDI.pwr_gpio_pin));
+                break;
+            case GOT_DATA:
+                soil_daq_state = SENT_DATA;
+                rosWriteStr("",soilDDI.data,soil_chars_read);   //Publish data
+                break;
+            case SENT_DATA:
+                soil_daq_state = START;
+      };
   }
 
 }
 
 /**
   * @brief System Clock Configuration
+  * @todo Make periph clock independent of selected peripherals
   * @retval None
   */
 void SystemClock_Config(void)
@@ -177,181 +193,135 @@ void SystemClock_Config(void)
 
 
 /**
-  * @brief UART4 Initialization Function
-  * @param None
+  * @brief Generic UART Initialization Function
+  * Most important parameters exposed. Can add more if desired.
   * @retval None
   */
-static void MX_UART4_Init(void)
+void UARTx_Init(UART_HandleTypeDef* huart_x, USART_TypeDef* UART_x, int IRQ_num, uint8_t boolEnIRQ,
+                uint32_t baud, uint32_t word_len, uint32_t stop_bits, uint32_t parity, uint32_t mode,
+                uint32_t hwflwctrl, uint32_t ov_flg, uint32_t obs_flg, uint32_t adv_feat_flg,
+                void (*TxISR)(UART_HandleTypeDef* huart),void (*RxISR)(UART_HandleTypeDef* huart),
+                uint32_t grpPriority, uint32_t subPriority)
 {
-
-    __HAL_RCC_UART4_CLK_ENABLE();
-
-  huart4.Instance = UART4;
-  huart4.Init.BaudRate = 1200;					//Speed of soil sensor
-  huart4.Init.WordLength = UART_WORDLENGTH_8B;
-  huart4.Init.StopBits = UART_STOPBITS_1;
-  huart4.Init.Parity = UART_PARITY_NONE;
-  huart4.Init.Mode = UART_MODE_TX_RX;           //Nonzero
-  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
-  huart4.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart4.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  //huart4.RxISR = &HAL_UART_RxCpltCallback;
-  huart4.TxISR = &HAL_UART_TxCpltCallback;
-  if (HAL_UART_Init(&huart4) != HAL_OK)
+  huart_x->Instance = UART_x;
+  huart_x->Init.BaudRate = baud;					
+  huart_x->Init.WordLength = word_len;
+  huart_x->Init.StopBits = stop_bits;
+  huart_x->Init.Parity = parity;
+  huart_x->Init.Mode = mode;
+  huart_x->Init.HwFlowCtl = hwflwctrl;
+  huart_x->Init.OverSampling = ov_flg;
+  huart_x->Init.OneBitSampling = obs_flg;
+  huart_x->AdvancedInit.AdvFeatureInit = adv_feat_flg;
+  huart_x->RxISR = RxISR;
+  huart_x->TxISR = TxISR;
+  if (HAL_UART_Init(huart_x) != HAL_OK)
   {
     Error_Handler();
   }
-  UART4->ICR = 0x121bdf;
-  UART4->CR1 = SET_REGISTER(UART4->CR1,USART_CR1_RXNEIE_Msk,USART_CR1_RXNEIE);
-  //UART4->CR1 = SET_REGISTER(UART4->CR1,USART_CR1_TCIE_Msk,USART_CR1_TCIE);
-  HAL_NVIC_SetPriority(UART4_IRQn, 0, 0);
-  //HAL_NVIC_EnableIRQ(UART4_IRQn);
+  HAL_NVIC_SetPriority(IRQ_num, grpPriority, subPriority);
+  if(boolEnIRQ) HAL_NVIC_EnableIRQ(IRQ_num);
 }
 
 /**
-  * @brief UART3 Initialization Function
-  * @param None
+  * @brief Generic Timer Initialization Function
+  * Most important parameters exposed. Can add more if desired.
   * @retval None
   */
-static void MX_USART3_Init(void) //Currently UART4 in Amalthea_Firmware... need to replace with USART3 pins
+void TIMx_Init(TIM_HandleTypeDef* htim_x, TIM_TypeDef* tim_x, int IRQ_num, uint8_t boolEnIRQ,
+                uint32_t prescaler, uint32_t mode, uint32_t clk_div, uint32_t period, uint32_t rep_cntr_val, uint32_t auto_rp, uint32_t clk_src,
+                uint32_t master_out_trig1, uint32_t master_out_trig2, uint32_t master_slave_mode, uint32_t op_mode, uint32_t grpPriority, uint32_t subPriority)
 {
+    TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+    TIM_MasterConfigTypeDef sMasterConfig = {0};
 
-    __HAL_RCC_USART3_CLK_ENABLE();
+    /* BASE INITIALIZATION */
+    htim_x->Instance = tim_x;
+    htim_x->Init.Prescaler = prescaler-1; //(uint32_t) (( HAL_RCC_GetPCLK2Freq() / 1<<16) - 1U); //1<<16 Hz clock
+    htim_x->Init.CounterMode = mode;
+    htim_x->Init.Period = period-1;
+    htim_x->Init.ClockDivision = clk_div;
+    htim_x->Init.RepetitionCounter = rep_cntr_val;
+    htim_x->Init.AutoReloadPreload = auto_rp;
+    if (HAL_TIM_Base_Init(htim_x) != HAL_OK)
+    {
+        Error_Handler();
+    }
 
-  husart3.Instance = USART3;
-  husart3.Init.BaudRate = 57600;
-  husart3.Init.WordLength = UART_WORDLENGTH_8B;
-  husart3.Init.StopBits = UART_STOPBITS_1;
-  husart3.Init.Parity = UART_PARITY_NONE;
-  husart3.Init.Mode = UART_MODE_TX_RX;
-  if (HAL_UART_Init(&husart3) != HAL_OK)
-  {
-    Error_Handler();
-  }
+    //IF DISABLING/ENABLING EXTERNAL CLOCK SOURCE
+    sClockSourceConfig.ClockSource = clk_src;
+    if (HAL_TIM_ConfigClockSource(htim_x, &sClockSourceConfig) != HAL_OK)
+    {
+        Error_Handler();
+    }
+    //IF ENABLING OTHER INTERRUPTS (duplicate of HAL_TIM_Base_Init, with TIMx_CCR1 changed)
+    if (HAL_TIM_OnePulse_Init(htim_x, op_mode) != HAL_OK)
+    {
+        Error_Handler();
+    }
+    //IF SETTING MASTER MODE FOR CLOCK
+    sMasterConfig.MasterOutputTrigger = master_out_trig1;
+    sMasterConfig.MasterOutputTrigger2 = master_out_trig2;
+    sMasterConfig.MasterSlaveMode = master_slave_mode;
+    if (HAL_TIMEx_MasterConfigSynchronization(htim_x, &sMasterConfig) != HAL_OK)
+    {
+        Error_Handler();
+    }
 
-  HAL_NVIC_SetPriority(USART3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(USART3_IRQn);
+    /* VERY IMPORTANT: ENABLE INTERRUPTS */
+    HAL_NVIC_SetPriority(IRQ_num, grpPriority, subPriority);
+    if(boolEnIRQ) HAL_NVIC_EnableIRQ(IRQ_num);
+
+    /* IMPORTANT INITIALIZATION */
+    htim_x->Instance->SR = 0; //Reset status register to initialize
 }
-
-
 /**
-  * @brief DMA2 Initialization Function for UART4
-  * @param None
+  * @brief Generic DMA Initialization Function
+  * Most important parameters exposed. Can add more if desired.
   * @retval None
   */
-static void DMA2_Init(void)
-{
-  #define UART4_RX_CH_IDX 16 //LSb # of channel to select in DMA
-  #define UART4_RX_REQUEST 0b10 //Set channel selection (as UART4_RX)
-  #define UART4_TX_CH_IDX 8
-  #define UART4_TX_REQUEST 0b10 //Same sel for TX, coincidentally
-    //__HAL_RCC_DMA1_CLK_ENABLE();
-    __HAL_RCC_DMA2_CLK_ENABLE();
-
-  __HAL_LINKDMA(&huart4,hdmarx,hdma2);
-  __HAL_LINKDMA(&huart4,hdmatx,hdma2);
-
-  hdma2.DmaBaseAddress = DMA2;
-  hdma2.Instance = DMA2_Channel5;
-  hdma2.Init.Request = UART4_RX_REQUEST;
-  hdma2.ChannelIndex = UART4_RX_CH_IDX;
-  hdma2.Init.Direction = DMA_PERIPH_TO_MEMORY;
-  hdma2.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-  hdma2.Init.MemInc = DMA_MINC_DISABLE;						//MUST DISABLE so reset DMA read location to start of arr each measurement cycle
-  hdma2.Init.Mode = DMA_NORMAL;
-  hdma2.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;
-  hdma2.Init.PeriphInc = DMA_PINC_DISABLE;
-  hdma2.Init.Priority = DMA_PRIORITY_MEDIUM;
-  if (HAL_DMA_Init(&hdma2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  NVIC_EnableIRQ(DMA2_Channel5_IRQn);
-  NVIC_EnableIRQ(DMA2_Channel3_IRQn);
+void DMAx_Init(DMA_HandleTypeDef* hdma_x, DMA_TypeDef* base_addr, int IRQ_num, DMA_Channel_TypeDef* inst, uint8_t boolEnIRQ,
+                uint32_t request, uint32_t ch_idx, uint32_t dir, uint32_t mem_align, uint32_t m_inc, uint32_t mode,
+                uint32_t periph_align, uint32_t p_inc, uint32_t priority, uint32_t grpPriority, uint32_t subPriority){
+    
+    hdma_x->DmaBaseAddress = base_addr;
+    hdma_x->Instance = inst;
+    hdma_x->Init.Request = request;
+    hdma_x->ChannelIndex = ch_idx;
+    hdma_x->Init.Direction = dir;
+    hdma_x->Init.MemDataAlignment = mem_align;
+    hdma_x->Init.MemInc = m_inc;				
+    hdma_x->Init.Mode = mode;
+    hdma_x->Init.PeriphDataAlignment = periph_align;
+    hdma_x->Init.PeriphInc = p_inc;
+    hdma_x->Init.Priority = priority;
+    if (HAL_DMA_Init(hdma_x) != HAL_OK)
+    {
+        Error_Handler();
+    }
+    HAL_NVIC_SetPriority(IRQ_num, grpPriority, subPriority);
+    if(boolEnIRQ) NVIC_EnableIRQ(IRQ_num);
 }
-
 
 /**
-  * @brief GPIO Initialization Function
-  * @param None
+  * @brief Generic GPIO Initialization Function
+  * Most important parameters exposed. Can add more if desired.
   * @retval None
   */
-static void MX_GPIO_Init(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
+void GPIOx_Init(GPIO_TypeDef* gpio_x, uint32_t pin, uint32_t mode, uint32_t pull, uint32_t alt, uint32_t speed){
+    GPIO_InitTypeDef GPIO_InitStruct;
+    HAL_PWREx_EnableVddIO2();
 
-  /* GPIO Ports Clock Enable */
-  //__HAL_RCC_GPIOC_CLK_ENABLE();
-  //__HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE(); //Enable UART4 GPIO pins //<-----
-  __HAL_RCC_GPIOB_CLK_ENABLE(); //Enable USART3 GPIO + LED GPIO pins //<-----
-  //__HAL_RCC_GPIOG_CLK_ENABLE();
-  HAL_PWREx_EnableVddIO2();
-  //__HAL_RCC_GPIOD_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|LD2_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  //HAL_GPIO_WritePin(GPIOG, GPIO_PIN_6, GPIO_PIN_RESET);
-
-  /*Configure GPIO pins : PB14, LD2_Pin */
-  GPIO_InitStruct.Pin = GPIO_PIN_14|LD2_Pin; //<------- LED3 and LED2
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PB10, PB11 */
-    GPIO_InitStruct.Pin = GPIO_PIN_10;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP; //USART3 TX
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Alternate = GPIO_AF7_USART3;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = GPIO_PIN_11;
-	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP; //USART3 RX
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  //Configure GPIO pin : PA0
-	GPIO_InitStruct.Pin = GPIO_PIN_0;
-	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP; //UART4 TX
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	GPIO_InitStruct.Alternate = GPIO_AF8_UART4;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-	//Configure GPIO pin : PA1
-	GPIO_InitStruct.Pin = GPIO_PIN_1;
-	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;//UART4 RX
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
+    /*Configure GPIO pins */
+    GPIO_InitStruct.Pin = pin;
+    GPIO_InitStruct.Mode = mode;
+    GPIO_InitStruct.Pull = pull;
+    GPIO_InitStruct.Alternate = alt;
+    GPIO_InitStruct.Speed = speed;
+    HAL_GPIO_WritePin(gpio_x, pin, GPIO_PIN_RESET);
+    HAL_GPIO_Init(gpio_x, &GPIO_InitStruct);
 }
 
-
-
-/* USER CODE BEGIN 4 */
-/**
-  * @brief  This function is executed at the end of the wait period
-  * @param *htim1: pointer to an initialized timer struct
-  * @retval None
-  */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim1){
-	if(htim1->Instance == TIM1)
-	{
-		///*
-		#ifndef NO_DEBUG
-			uint32_t time = HAL_GetTick();
-			if((time - startTime) < 349) HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-		#endif
-		HAL_TIM_Base_Stop(htim1);	 	//Stop timer till next time
-		htim1->Instance->SR = 0; 		//Reset status register for future use
-		soilSensor_state = ACQUIRED;
-		//*/
-	}
-}
 
 
 /* USER CODE END 4 */
@@ -414,11 +384,6 @@ void SysTick_Handler(void)
 #endif
 }
 
-void DMA2_Channel3_IRQHandler(void)
-{
-    HAL_DMA_IRQHandler(&hdma2);
-}
-
 void DMA2_Channel5_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(&hdma2);
@@ -426,26 +391,46 @@ void DMA2_Channel5_IRQHandler(void)
 
 void UART4_IRQHandler(void)
 {
-  HAL_UART_IRQHandler(&huart4);
+  HAL_UART_IRQHandler(&(soilDDI.UART));
 }
 
 void TIM1_UP_TIM16_IRQHandler(void)
 {
-	HAL_TIM_IRQHandler(&htim1);
+	HAL_TIM_IRQHandler(&(soilDDI.TIM));
 }
 
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
-{
-	if(huart->Instance == UART4){
-		//HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-	}
-}
-
+/**
+  * @brief  This function is executed after all data is received (for specified read length)
+  * @param *huart: pointer to an initialized UART struct
+  * @retval None
+  */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-	if(huart->Instance == UART4){
-		if(soil_chars_read < (sizeof(soil_data)/sizeof(soil_data[0]) -1)){
-			soil_chars_read++; HAL_UART_Receive_DMA(huart, soil_data+soil_chars_read, SOIL_DMA_READ_BYTES); //When received SOIL_DMA_READ_BYTES, restart DMA read to receive the next batch
-		}
+	if(huart == &soilDDI.UART){
+    //For DDI soil sensor, call the appropriate update after received a BATCH of total expected measurement data
+    soilDDI.UART_RXCplt_CB(&soilDDI,sizeof(soilDDI.data)/sizeof(soilDDI.data[0]) );
 	}
+}
+
+/**
+  * @brief  This function is executed at the end of the wait period
+  * @param *htim: pointer to an initialized timer struct
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
+	if(htim == &soilDDI.TIM)
+	{
+		//#ifndef NO_DEBUG
+		//	uint32_t time = HAL_GetTick();
+		//	if((time - startTime) < 349) HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+		//#endif
+		
+    //For DDI soil sensor, call the appropriate update to after reading timeout  
+        soilDDI.TIM_Elapsed_CB(htim);
+	}
+}
+
+
+void HardFault_Handler(void){
+  Error_Handler();
 }
