@@ -18,7 +18,13 @@
 
 #include <string.h>
 
-#define DDI_DMA_READ_LEN 1u
+#define DDI_DMA_READ_LEN  1u
+#define DDI_SERIAL_BAUD   1200
+#define UART_EN_IRQ       1
+#define UART_CLEAR_FLAGS  0x121bdf
+#define TIM_EN_IRQ        1
+#define REP_CNTR_INIT_VAL 0
+#define DMA_EN_IRQ        1
 
 
 typedef struct DDI_TypeDef{

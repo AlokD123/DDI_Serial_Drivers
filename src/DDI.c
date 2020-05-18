@@ -18,17 +18,17 @@ void DDI_UARTx_Init(UART_HandleTypeDef* huart_x, USART_TypeDef* UART_x, int IRQ_
                     uint32_t mode, uint32_t hwflwctrl, uint32_t ov_flg, uint32_t obs_flg,
                     void (*TxISR)(UART_HandleTypeDef* huart),uint32_t grpPriority, uint32_t subPriority)
 {
-    UARTx_Init(huart_x,UART_x,IRQ_num,1,1200,UART_WORDLENGTH_8B,UART_STOPBITS_1,UART_PARITY_NONE,
+    UARTx_Init(huart_x,UART_x,IRQ_num,UART_EN_IRQ,DDI_SERIAL_BAUD,UART_WORDLENGTH_8B,UART_STOPBITS_1,UART_PARITY_NONE,
                 mode,hwflwctrl,ov_flg,obs_flg,                                                       
                 UART_ADVFEATURE_NO_INIT,TxISR,NULL,grpPriority,subPriority);
-    UART_x->ICR = 0x121bdf;
+    UART_x->ICR = UART_CLEAR_FLAGS;
     UART_x->CR1 = SET_REGISTER(UART_x->CR1,USART_CR1_RXNEIE_Msk,USART_CR1_RXNEIE);
 }
 
 void DDI_TIMx_Init(TIM_HandleTypeDef* htim_x, TIM_TypeDef* tim_x, int IRQ_num,
                     uint32_t prescaler, uint32_t period, uint32_t grpPriority, uint32_t subPriority, uint32_t dbg_reg, uint32_t dbg_mode)
 {
-    TIMx_Init(htim_x, tim_x, IRQ_num, 1, prescaler, TIM_COUNTERMODE_UP, TIM_CLOCKDIVISION_DIV1, period, 0, TIM_AUTORELOAD_PRELOAD_ENABLE, TIM_CLOCKSOURCE_INTERNAL,
+    TIMx_Init(htim_x, tim_x, IRQ_num, TIM_EN_IRQ, prescaler, TIM_COUNTERMODE_UP, TIM_CLOCKDIVISION_DIV1, period, REP_CNTR_INIT_VAL, TIM_AUTORELOAD_PRELOAD_ENABLE, TIM_CLOCKSOURCE_INTERNAL,
                 TIM_TRGO_RESET, TIM_TRGO2_RESET, TIM_MASTERSLAVEMODE_DISABLE, TIM_OPMODE_SINGLE, grpPriority, subPriority);
     dbg_reg |= dbg_mode;
 }
@@ -37,7 +37,7 @@ void DDI_TIMx_Init(TIM_HandleTypeDef* htim_x, TIM_TypeDef* tim_x, int IRQ_num,
 void DDI_DMAx_Init(DMA_HandleTypeDef* hdma_x, DMA_TypeDef* base_addr, int IRQ_num, DMA_Channel_TypeDef* inst,
                     uint32_t request, uint32_t ch_idx, uint32_t priority, uint32_t grpPriority, uint32_t subPriority)
 {
-    DMAx_Init(hdma_x, base_addr, IRQ_num, inst, 1, request, ch_idx, DMA_PERIPH_TO_MEMORY, DMA_MDATAALIGN_BYTE, DMA_MINC_DISABLE, //MUST DISABLE so reset DMA read location to start of arr each measurement cycle
+    DMAx_Init(hdma_x, base_addr, IRQ_num, inst, DMA_EN_IRQ, request, ch_idx, DMA_PERIPH_TO_MEMORY, DMA_MDATAALIGN_BYTE, DMA_MINC_DISABLE, //MUST DISABLE so reset DMA read location to start of arr each measurement cycle
               DMA_NORMAL,DMA_PDATAALIGN_WORD,DMA_PINC_DISABLE,priority,grpPriority,subPriority);
 }
 
