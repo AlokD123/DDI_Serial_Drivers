@@ -4,7 +4,7 @@ This is a custom driver for data acquisition from sensors that communicate using
 
 In the past, many libraries (c.f. page 4 of [this datasheet](http://www.ictinternational.com/content/uploads/2014/03/5TE-Integrators-Guide.pdf)) have implemented DDI using bit-banging. This library reduces the processor overhead of such methods by:
 
-1) leveraging UARTs to implement the 8N1 timing in hardware (see first diagram below), and developing a state machine to implement the setup-hold-reset cycle (see second diagram below).
+1) leveraging UARTs to implement the 8N1 timing in hardware (see first diagram below), and developing a state machine to implement the measurement-response-reset cycle (see second diagram below).
 
 ![Fig. 1: ASCII Character Structure](/images/DDI_ASCII_Char_Structure.png)
 
