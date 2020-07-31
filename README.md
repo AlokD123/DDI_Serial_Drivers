@@ -6,6 +6,10 @@ In the past, many libraries (c.f. page 4 of [this datasheet](http://www.ictinter
 
 1) leveraging UARTs to implement the 8N1 timing in hardware (see first diagram below), and developing a state machine to implement the setup-hold-reset cycle (see second diagram below).
 
+![Fig. 1: ASCII Character Structure](/images/DDI_ASCII_Char_Structure.png)
+
+![Fig. 2: DDI Timing Diagram](/images/DDI_Timing_Diagram.png)
+
 2) using the integrated DMA controller to facilitate memory transfers at each UART receive-interrupt.
 
 Note that the DDI protocol timing does not conform to a standard amongst manufactures, even though the states do. This implementation is for a particular device described [here](http://www.ictinternational.com/content/uploads/2014/03/5TE-Integrators-Guide.pdf).
