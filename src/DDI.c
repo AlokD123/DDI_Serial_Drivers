@@ -1,12 +1,18 @@
-/*
- * DDI.c
- *
- *  Created on: May 17, 2020
- *      Author: Alok Deshpande
- */
+/**
+  * @file           : DDI.c
+  * @brief          : Source for DDI serial protocol driver, with client-device dependent reconfiguration options
+  * @author         : Alok Deshpande
+  * @date           : May 17, 2020
+  */
+
 #ifndef DDI_H_
 	#include "../include/DDI.h"
 #endif
+
+#define UART4_RX_CH_IDX 16 //LSb # of channel to select in DMA
+#define UART4_RX_REQUEST 0b10 //Set channel selection (as UART4_RX)
+#define UART4_TX_CH_IDX 8
+#define UART4_TX_REQUEST 0b10 //Same sel for TX, coincidentally
 
 static volatile DDI_state state = INIT;
 static volatile uint8_t chars_read = 0;
@@ -17,6 +23,7 @@ static volatile uint8_t chars_read = 0;
 void DDI_UARTx_Init(UART_HandleTypeDef* huart_x, USART_TypeDef* UART_x, int IRQ_num,
                     uint32_t mode, uint32_t hwflwctrl, uint32_t ov_flg, uint32_t obs_flg,
                     void (*TxISR)(UART_HandleTypeDef* huart),uint32_t grpPriority, uint32_t subPriority)
+    //Function to initialize UART for interrupts and many re-configurable options (e.g. interrupt priority, type of hardware flow, etc.)
 {
     UARTx_Init(huart_x,UART_x,IRQ_num,UART_EN_IRQ,DDI_SERIAL_BAUD,UART_WORDLENGTH_8B,UART_STOPBITS_1,UART_PARITY_NONE,
                 mode,hwflwctrl,ov_flg,obs_flg,                                                       
@@ -27,6 +34,7 @@ void DDI_UARTx_Init(UART_HandleTypeDef* huart_x, USART_TypeDef* UART_x, int IRQ_
 
 void DDI_TIMx_Init(TIM_HandleTypeDef* htim_x, TIM_TypeDef* tim_x, int IRQ_num,
                     uint32_t prescaler, uint32_t period, uint32_t grpPriority, uint32_t subPriority, uint32_t dbg_reg, uint32_t dbg_mode)
+    //Function to initialize hardware timer for triggering state transitions
 {
     TIMx_Init(htim_x, tim_x, IRQ_num, TIM_EN_IRQ, prescaler, TIM_COUNTERMODE_UP, TIM_CLOCKDIVISION_DIV1, period, REP_CNTR_INIT_VAL, TIM_AUTORELOAD_PRELOAD_ENABLE, TIM_CLOCKSOURCE_INTERNAL,
                 TIM_TRGO_RESET, TIM_TRGO2_RESET, TIM_MASTERSLAVEMODE_DISABLE, TIM_OPMODE_SINGLE, grpPriority, subPriority);
@@ -36,6 +44,7 @@ void DDI_TIMx_Init(TIM_HandleTypeDef* htim_x, TIM_TypeDef* tim_x, int IRQ_num,
 
 void DDI_DMAx_Init(DMA_HandleTypeDef* hdma_x, DMA_TypeDef* base_addr, int IRQ_num, DMA_Channel_TypeDef* inst,
                     uint32_t request, uint32_t ch_idx, uint32_t priority, uint32_t grpPriority, uint32_t subPriority)
+    //Function to initialize DMA for reading from UART port and writing to memory. Disabled read- write-location address incrementing
 {
     DMAx_Init(hdma_x, base_addr, IRQ_num, inst, DMA_EN_IRQ, request, ch_idx, DMA_PERIPH_TO_MEMORY, DMA_MDATAALIGN_BYTE, DMA_MINC_DISABLE, //MUST DISABLE so reset DMA read location to start of arr each measurement cycle
               DMA_NORMAL,DMA_PDATAALIGN_WORD,DMA_PINC_DISABLE,priority,grpPriority,subPriority);
@@ -44,10 +53,8 @@ void DDI_DMAx_Init(DMA_HandleTypeDef* hdma_x, DMA_TypeDef* base_addr, int IRQ_nu
 void DDI_DMA2_UART4_TIM1_Init(DMA_HandleTypeDef* hdma2,uint32_t dma_priority, uint32_t dma_grpPriority, uint32_t dma_subPriority,
                               TIM_HandleTypeDef* htim1, uint32_t prescaler, uint32_t period, uint32_t tim_grpPriority, uint32_t tim_subPriority,
                               UART_HandleTypeDef* huart4, uint32_t mode, uint32_t hwflwctrl, uint32_t ov_flg, uint32_t obs_flg, void (*TxISR)(UART_HandleTypeDef* huart),uint32_t uart_grpPriority, uint32_t uart_subPriority){
-    #define UART4_RX_CH_IDX 16 //LSb # of channel to select in DMA
-    #define UART4_RX_REQUEST 0b10 //Set channel selection (as UART4_RX)
-    #define UART4_TX_CH_IDX 8
-    #define UART4_TX_REQUEST 0b10 //Same sel for TX, coincidentally
+
+    //Function to enable clock to (power on) DMA, UART, timer and GPIO pins
 
     DDI_DMAx_Init(hdma2,DMA2,DMA2_Channel5_IRQn,DMA2_Channel5,UART4_RX_REQUEST,UART4_RX_CH_IDX,dma_priority,dma_grpPriority,dma_subPriority);
     __HAL_RCC_DMA2_CLK_ENABLE();
@@ -67,12 +74,14 @@ void DDI_DMA2_UART4_TIM1_Init(DMA_HandleTypeDef* hdma2,uint32_t dma_priority, ui
 }
 
 static void DDI_TIM_CB(TIM_HandleTypeDef* htim){
+    //Callback function when data acquired
     HAL_TIM_Base_Stop(htim);	 	//Stop timer till next time
     htim->Instance->SR = 0; 		//Reset status register for future use
     state = ACQUIRED;
 }
 
 static void DDI_RXCplt_CB(DDI_TypeDef* DDI_device, int DDI_rxSz){
+    // Callback for expected number of characters received
     if(chars_read < (DDI_rxSz-1) ){
         //When received DDI_DMA_READ_LEN, restart DMA read to receive the next batch
         chars_read+=DDI_DMA_READ_LEN;
@@ -83,36 +92,44 @@ static void DDI_RXCplt_CB(DDI_TypeDef* DDI_device, int DDI_rxSz){
 void DDI_Init_DMA(DMA_HandleTypeDef* hdma, DDI_TypeDef* DDI_device, volatile uint8_t* data_buf, uint32_t dma_priority, uint32_t dma_grpPriority, uint32_t dma_subPriority,
                 uint32_t prescaler, uint32_t period, uint32_t tim_grpPriority, uint32_t tim_subPriority,
                 uint32_t mode, uint32_t hwflwctrl, uint32_t ov_flg, uint32_t obs_flg, void (*TxISR)(UART_HandleTypeDef* huart),uint32_t uart_grpPriority, uint32_t uart_subPriority)
+    //Specifically initialize DMA4 and connect with UART4. Will generalize this to other peripherals in the future
 {
     DDI_device->data = data_buf;
     DDI_DMA2_UART4_TIM1_Init(hdma, dma_priority, dma_grpPriority, dma_subPriority,
                             &(DDI_device->TIM),prescaler,period,tim_grpPriority,tim_subPriority,
                             &(DDI_device->UART),mode,hwflwctrl,ov_flg,obs_flg,TxISR,uart_grpPriority,uart_subPriority);
     
-    ///*
+    //Configure various registers for devices. TODO: document in more detail and remove magic numbers
     DMA2_Channel5->CCR = 0x1200; DMA2_CSELR->CSELR = 0x20000;
     TIM1->CR1 = 0x88; TIM1->PSC = 0x2D1; TIM1->ARR = 0x5997; TIM1->DMAR = 0x88; TIM1->OR2 = 0x1; TIM1->OR3 = 0x1;
     GPIOA->MODER = 0xABFFFFFA; GPIOA->OSPEEDR = 0x0C00000F; GPIOA->PUPDR = 0x64000005; GPIOA->IDR = 0x8003; GPIOA->AFR[0] = 0x88;
     UART4->CR1 = 0x2D; UART4->BRR = 0x4D0A; UART4->ISR = 0x600090;
-    //*/
 
+    //Set callbacks
     DDI_device->TIM_Elapsed_CB = &DDI_TIM_CB;
     DDI_device->UART_RXCplt_CB = &DDI_RXCplt_CB;
 }
 
+/**
+ * @brief State machine for DDI data acquisition
+ * @param old_data: buffer containing past acquired data, to be overwritten with new data conditionally
+ * @param DDI_device: memory mapped location of device from which to acquire data
+ * @param DDI_daq_state: state of the data acquisition
+ * @param pwr_gpio_port: port on which power pin of DDI client device is connected
+ * @param pwr_gpio_pin: associate pin on the abovementioned port
+ * @return number of characters read
+*/
 uint8_t DDI_getVal(DDI_TypeDef* DDI_device, uint8_t* old_data, DAQ_state* DDI_daq_state, GPIO_TypeDef* pwr_gpio_port, uint16_t* pwr_gpio_pin){
-	//State machine...
 	switch(state){
 		case INIT:
 			//Start sensor, initialize
             chars_read = 0;
-			HAL_GPIO_TogglePin(pwr_gpio_port,*pwr_gpio_pin); //TO DO: possibly connect to MOSFET
+			HAL_GPIO_TogglePin(pwr_gpio_port,*pwr_gpio_pin); //TO DO: possibly connect to MOSFET for switching (client device dependent)
 			//Start timer
 			HAL_TIM_Base_Start(&(DDI_device->TIM));
 			HAL_TIM_Base_Start_IT(&(DDI_device->TIM));
             HAL_UART_Receive_DMA(&(DDI_device->UART), DDI_device->data, DDI_DMA_READ_LEN); //Start receiving data
             //Start to wait for reading
-            //startTime = HAL_GetTick();
             state = WAIT;
 			break;
 		case WAIT:

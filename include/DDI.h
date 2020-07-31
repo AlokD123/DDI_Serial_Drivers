@@ -1,9 +1,10 @@
-/*
- * DDI Serial Library
- *
- *  Created on: May 17, 2020
- *      Author: Alok Deshpande
- */
+/**
+  * @file           : DDI.h
+  * @brief          : Header file for DDI serial protocol driver, with client-device dependent reconfiguration options
+  * @author         : Alok Deshpande
+  * @date           : May 17, 2020
+  */
+
 
 #ifndef DDI_H_
 #define DDI_H_

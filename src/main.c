@@ -1,34 +1,24 @@
-/* USER CODE BEGIN Header */
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * <h2><center>&copy; Copyright (c) 2020 STMicroelectronics.
-  * All rights reserved.</center></h2>
-  *
-  * This software component is licensed by ST under BSD 3-Clause license,
-  * the "License"; You may not use this file except in compliance with the
-  * License. You may obtain a copy of the License at:
-  *                        opensource.org/licenses/BSD-3-Clause
-  *
-  ******************************************************************************
+  * @brief          : An example use of the DDI library for a soil sensor
   */
-/* USER CODE END Header */
-
+ 
 /* Includes ------------------------------------------------------------------*/
 #include "../include/main.h"
 #include <assert.h>
 
-//Soil sensor definition
-#define PRESCALER 7220 //722				    //For 65kHz freq, with 47MHz clk
-#define SOIL_TIMEOUT_PERIOD_TICKS 655360 //22936 //For 350ms period, with prescaler=722
-#define SOIL_PWR_GPIO_PORT GPIOB
-#define SOIL_PWR_GPIO_PIN GPIO_PIN_14
-#define RX_SIZE 30
+/*
+Definition of sensor for example (a soil sensor). Parameters should be reconfigured for other applications
+*/
+#define DDI_TIME 350                      //Timing of full period, in milliseconds
+#define PRESCALER 7220      				      //For 65kHz freq, with 47MHz clk
+#define SOIL_TIMEOUT_PERIOD_TICKS 655360 //For DDI_TIME period, with prescaler=PRESCALER
+#define SOIL_PWR_GPIO_PORT GPIOB          //Selected port for DDI client device connection
+#define SOIL_PWR_GPIO_PIN GPIO_PIN_14     //Selected pin for DDI client device connection
+#define RX_SIZE 30                        //Number of bytes per response to read
 
+//Default priority levels
 #define DMA_GRP_PRIORITY 15
 #define DMA_SUB_PRIORITY 15
 #define TIM_GRP_PRIORITY 15
@@ -59,14 +49,11 @@ __HAL_RCC_SYSCFG_CLK_ENABLE();
  HAL_NVIC_EnableIRQ(SysTick_IRQn);
 }
 
-void rosWriteStr(const char* topic, volatile uint8_t* str_msg_ptr, size_t num_bytes){
-	//HAL_USART_Transmit(&husart3, str_msg_ptr, num_bytes, 100); //100ms timeout
+void writeStr(const char* topic, volatile uint8_t* str_msg_ptr, size_t num_bytes){
+	HAL_USART_Transmit(&husart3, str_msg_ptr, num_bytes, 100); //100ms timeout
 }
 
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
+
 
  static DDI_TypeDef soilDDI = {0}; //Sensor
  static DMA_HandleTypeDef hdma2;   //Using DMA2
@@ -75,8 +62,13 @@ void rosWriteStr(const char* topic, volatile uint8_t* str_msg_ptr, size_t num_by
  volatile static uint8_t soil_data[RX_SIZE];
  static uint8_t old_soil_data[RX_SIZE];
  //Program state variables
- DAQ_state soil_daq_state = START;
+ DAQ_state soil_daq_state = START; //State of DDI sensor
 
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
 #ifndef UNIT_TEST
 int main(void)
 #else
@@ -103,6 +95,7 @@ int app_main(void)
                 UART_MODE_TX_RX, UART_HWCONTROL_NONE,UART_OVERSAMPLING_16,UART_ONE_BIT_SAMPLE_DISABLE,
                 HAL_UART_TxCpltCallback,UART_GRP_PRIORITY,UART_SUB_PRIORITY);
 
+  /* Create data acquisition */
   while (1)
   {
 	  switch(soil_daq_state){
@@ -111,7 +104,7 @@ int app_main(void)
                 break;
             case GOT_DATA:
                 soil_daq_state = SENT_DATA;
-                rosWriteStr("",soilDDI.data,soil_chars_read);   //Publish data
+                writeStr("",soilDDI.data,soil_chars_read);   //Publish data
                 break;
             case SENT_DATA:
                 soil_daq_state = START;
@@ -367,11 +360,9 @@ void assert_failed(char *file, uint32_t line)
 }
 #endif /* USE_FULL_ASSERT */
 
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
-
 
 /******************************************************************************/
-/*            	  	    Processor Exceptions Handlers                         */
+/*            	  	    Interrupt Handlers                                    */
 /******************************************************************************/
 
 /**
@@ -424,13 +415,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 	if(htim == &soilDDI.TIM)
 	{
-		//#ifndef NO_DEBUG
-		//	uint32_t time = HAL_GetTick();
-		//	if((time - startTime) < 349) HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-		//#endif
+		#ifndef NO_DEBUG
+			uint32_t time = HAL_GetTick();
+			if((time - startTime) < DDI_TIME) HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);//Verify appropriate timing using an LED flash
+		#endif
 		
     //For DDI soil sensor, call the appropriate update to after reading timeout  
-        soilDDI.TIM_Elapsed_CB(htim);
+    soilDDI.TIM_Elapsed_CB(htim);
 	}
 }
 

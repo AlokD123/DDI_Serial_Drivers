@@ -1,3 +1,10 @@
+/**
+  * @file           : config.h
+  * @brief          : Common exported functions and structs in application exposed here
+  * @author         : Alok Deshpande
+  * @date           : May 17, 2020
+  */
+
 #ifndef CONFIG_H
 #define CONFIG_H
 
